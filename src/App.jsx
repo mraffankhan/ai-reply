@@ -9,26 +9,69 @@ function App() {
   const [reply, setReply] = useState('')
   const [copied, setCopied] = useState(false)
 
+  // New State for Model Discovery
+  const [activeModel, setActiveModel] = useState(null)
+  const [modelStatus, setModelStatus] = useState('Checking compatible models...')
+
   const tones = ['Professional', 'Polite', 'Smart', 'Savage']
   const outputRef = useRef(null)
 
   const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 
+  // Auto-Discovery on Mount
+  useEffect(() => {
+    checkModels()
+  }, [])
+
+  const checkModels = async () => {
+    const apiKey = import.meta.env.VITE_GEMINI_API_KEY
+    if (!apiKey) {
+      setModelStatus('API Key missing in .env')
+      return
+    }
+
+    const genAI = new GoogleGenerativeAI(apiKey)
+    // List of models to probe (in priority order)
+    const modelsToCheck = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
+
+    for (const modelName of modelsToCheck) {
+      try {
+        const model = genAI.getGenerativeModel({ model: modelName })
+        // Try a dummy generation (minimal token usage) to verify access
+        // We use a very short prompt "Hi"
+        const result = await model.generateContent("Hi")
+        await result.response
+
+        // If we reach here, the model works!
+        setActiveModel(modelName)
+        setModelStatus(`Connected to: ${modelName}`)
+        return
+      } catch (e) {
+        // Log locally, but continue checking
+        console.warn(`${modelName} check failed:`, e.message)
+      }
+    }
+    setModelStatus('No compatible models found. Check API Key quota.')
+  }
+
   const handleGenerate = async () => {
     if (!inputText.trim()) return
+
+    // Pre-flight check
+    if (!activeModel) {
+      setReply("Error: Still checking for models or no working model found. Please wait a moment or check your key.")
+      // Try discovering again if user clicks generate
+      checkModels()
+      return
+    }
 
     setIsGenerating(true)
     setReply('')
 
     try {
       const apiKey = import.meta.env.VITE_GEMINI_API_KEY
-      if (!apiKey) {
-        setReply("Error: API Key missing. Please add VITE_GEMINI_API_KEY to your .env file.")
-        setIsGenerating(false)
-        return
-      }
-
       const genAI = new GoogleGenerativeAI(apiKey)
+      const model = genAI.getGenerativeModel({ model: activeModel })
 
       const prompt = `
         You are Reply AI, a helpful assistant.
@@ -38,56 +81,30 @@ function App() {
         Constraint: Keep it short, human-like, and relevant. Do not include quotes or "Here is a reply". Just the reply text.
       `
 
-      // Recursive function to handle model fallback and retries
-      const makeRequest = async (modelName, retries = 2) => {
+      // Retry logic for the ACTIVE model (in case of transient 429 during usage)
+      const makeRequest = async (retries = 2) => {
         try {
-          const currentModel = genAI.getGenerativeModel({ model: modelName })
-          const result = await currentModel.generateContent(prompt)
+          const result = await model.generateContent(prompt)
           const response = await result.response
           return response.text()
         } catch (error) {
-          console.warn(`Request failed for ${modelName}:`, error.message)
-
-          const isQuotaError = error.message.includes("429")
-          const isNotFoundError = error.message.includes("404")
-
-          // Fallback Strategy: If 2.0-flash-exp fails (Quota or 404), switch to 1.5-flash
-          if ((isQuotaError || isNotFoundError) && modelName === "gemini-2.0-flash-exp") {
-            setReply("Experimental model overloaded. Switching to stable Gemini 1.5 Flash...")
-            await delay(1500)
-            return makeRequest("gemini-1.5-flash", 2) // Reset retries for new model
-          }
-
-          // Retry Strategy: If 1.5-flash fails with Quota, retry
-          if (isQuotaError && retries > 0) {
-            setReply(`High traffic, retrying in 3 seconds... (${retries} attempts left)`)
+          if (error.message.includes("429") && retries > 0) {
+            setReply(`High traffic on ${activeModel}, retrying... (${retries})`)
             await delay(3000)
-            return makeRequest(modelName, retries - 1)
+            return makeRequest(retries - 1)
           }
           throw error
         }
       }
 
-      // Start with the user's requested "2.5" (mapped to 2.0-flash-exp)
-      const text = await makeRequest("gemini-2.0-flash-exp")
+      const text = await makeRequest()
       setReply(text.trim())
 
     } catch (error) {
       console.error("Error generating reply:", error)
-      let errorMessage = "Error: Failed to generate reply."
-
-      if (error.message.includes("429")) {
-        errorMessage = "Error: System currently overloaded (Rate Limit). Please try again later."
-      } else if (error.message.includes("404")) {
-        errorMessage = "Error: AI Model not available. Please check your API key permissions."
-      } else {
-        errorMessage = `Error: ${error.message}`
-      }
-
-      setReply(errorMessage)
+      setReply(`Error: ${error.message}`)
     } finally {
       setIsGenerating(false)
-      // Scroll to output
       setTimeout(() => outputRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
     }
   }
@@ -102,7 +119,12 @@ function App() {
   return (
     <div className="app-container">
       <header className="header">
-        <h1>Reply AI</h1>
+        <div>
+          <h1>Reply AI</h1>
+          <p style={{ fontSize: '0.75rem', color: 'var(--color-primary)', fontWeight: 500, marginTop: '-2px', opacity: 0.8 }}>
+            {modelStatus}
+          </p>
+        </div>
         <div className="lang-toggle">
           <button
             className={language === 'English' ? 'active' : ''}
