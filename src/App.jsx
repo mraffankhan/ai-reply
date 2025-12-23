@@ -9,100 +9,52 @@ function App() {
   const [reply, setReply] = useState('')
   const [copied, setCopied] = useState(false)
 
-  // New State for Model Discovery
-  const [activeModel, setActiveModel] = useState(null)
-  const [modelStatus, setModelStatus] = useState('Checking compatible models...')
-
   const tones = ['Professional', 'Polite', 'Smart', 'Savage']
   const outputRef = useRef(null)
 
-  const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms))
-
-  // Auto-Discovery on Mount
-  useEffect(() => {
-    checkModels()
-  }, [])
-
-  const checkModels = async () => {
-    const apiKey = import.meta.env.VITE_GEMINI_API_KEY
-    if (!apiKey) {
-      setModelStatus('API Key missing in .env')
-      return
-    }
-
-    const genAI = new GoogleGenerativeAI(apiKey)
-    // List of models to probe (in priority order)
-    const modelsToCheck = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
-
-    for (const modelName of modelsToCheck) {
-      try {
-        const model = genAI.getGenerativeModel({ model: modelName })
-        // Try a dummy generation (minimal token usage) to verify access
-        // We use a very short prompt "Hi"
-        const result = await model.generateContent("Hi")
-        await result.response
-
-        // If we reach here, the model works!
-        setActiveModel(modelName)
-        setModelStatus(`Connected to: ${modelName}`)
-        return
-      } catch (e) {
-        // Log locally, but continue checking
-        console.warn(`${modelName} check failed:`, e.message)
-      }
-    }
-    setModelStatus('No compatible models found. Check API Key quota.')
-  }
-
   const handleGenerate = async () => {
     if (!inputText.trim()) return
-
-    // Pre-flight check
-    if (!activeModel) {
-      setReply("Error: Still checking for models or no working model found. Please wait a moment or check your key.")
-      // Try discovering again if user clicks generate
-      checkModels()
-      return
-    }
 
     setIsGenerating(true)
     setReply('')
 
     try {
       const apiKey = import.meta.env.VITE_GEMINI_API_KEY
+      if (!apiKey) {
+        setReply("Error: API Key missing in .env")
+        setIsGenerating(false)
+        return
+      }
+
+      // STRICT RULE: Only use one model. No discovery. No probes.
       const genAI = new GoogleGenerativeAI(apiKey)
-      const model = genAI.getGenerativeModel({ model: activeModel })
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" })
 
       const prompt = `
         You are Reply AI, a helpful assistant.
         Task: Generate a ${tone} reply to the following message.
         Original Message: "${inputText}"
-        Language: The reply must be in ${language === 'Hinglish' ? 'Hinglish (Mix of Hindi and English)' : 'English'}.
-        Constraint: Keep it short, human-like, and relevant. Do not include quotes or "Here is a reply". Just the reply text.
+        Language: The reply must be in ${language === 'Hinglish' ? 'Hinglish' : 'English'}.
+        Constraint: Keep it short, human-like, and relevant. Do not include quotes. Just the reply text.
       `
 
-      // Retry logic for the ACTIVE model (in case of transient 429 during usage)
-      const makeRequest = async (retries = 2) => {
-        try {
-          const result = await model.generateContent(prompt)
-          const response = await result.response
-          return response.text()
-        } catch (error) {
-          if (error.message.includes("429") && retries > 0) {
-            setReply(`High traffic on ${activeModel}, retrying... (${retries})`)
-            await delay(3000)
-            return makeRequest(retries - 1)
-          }
-          throw error
-        }
-      }
+      // Simple request. No fallback.
+      const result = await model.generateContent(prompt)
+      const response = await result.response
+      const text = response.text()
 
-      const text = await makeRequest()
       setReply(text.trim())
 
     } catch (error) {
-      console.error("Error generating reply:", error)
-      setReply(`Error: ${error.message}`)
+      console.error("Generation error:", error)
+
+      // STRICT RULE: Simple user-facing message for busy server.
+      if (error.message.includes("429") || error.message.includes("503")) {
+        setReply("Server is busy, please try again in a moment.")
+      } else {
+        setReply(`Error: ${error.message}`)
+      }
+
     } finally {
       setIsGenerating(false)
       setTimeout(() => outputRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
@@ -120,10 +72,7 @@ function App() {
     <div className="app-container">
       <header className="header">
         <div>
-          <h1>Reply AI</h1>
-          <p style={{ fontSize: '0.75rem', color: 'var(--color-primary)', fontWeight: 500, marginTop: '-2px', opacity: 0.8 }}>
-            {modelStatus}
-          </p>
+          <h1>AI REPLY - PROJECT 01</h1>
         </div>
         <div className="lang-toggle">
           <button
