@@ -1,5 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
-import { GoogleGenerativeAI } from '@google/generative-ai'
+import { useState, useRef } from 'react'
 
 function App() {
   const [inputText, setInputText] = useState('')
@@ -19,16 +18,7 @@ function App() {
     setReply('')
 
     try {
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY
-      if (!apiKey) {
-        setReply("Error: API Key missing in .env")
-        setIsGenerating(false)
-        return
-      }
-
-      // STRICT RULE: Only use one model. No discovery. No probes.
-      const genAI = new GoogleGenerativeAI(apiKey)
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" })
+      // Local LLM - No API Key required
 
       const prompt = `
         You are Reply AI, a helpful assistant.
@@ -38,22 +28,35 @@ function App() {
         Constraint: Keep it short, human-like, and relevant. Do not include quotes. Just the reply text.
       `
 
-      // Simple request. No fallback.
-      const result = await model.generateContent(prompt)
-      const response = await result.response
-      const text = response.text()
+      // Connect to Local Ollama Instance
+      // Ensure specific version tags if needed, or use 'latest' if user specified 'qwen2.5:3b-instruct'
+      const response = await fetch("http://localhost:11434/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "qwen2.5:3b-instruct",
+          messages: [
+            { role: "user", content: prompt }
+          ],
+          stream: false // consistent non-streaming response
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error(`Ollama Error: ${response.status} ${response.statusText}. Is Ollama running?`)
+      }
+
+      const data = await response.json()
+      // Ollama 'chat' endpoint returns message in data.message.content
+      const text = data.message?.content || "Error: No reply generated."
 
       setReply(text.trim())
 
     } catch (error) {
       console.error("Generation error:", error)
-
-      // STRICT RULE: Simple user-facing message for busy server.
-      if (error.message.includes("429") || error.message.includes("503")) {
-        setReply("Server is busy, please try again in a moment.")
-      } else {
-        setReply(`Error: ${error.message}`)
-      }
+      setReply(`Error: ${error.message}. Make sure Ollama is running (http://localhost:11434).`)
 
     } finally {
       setIsGenerating(false)
